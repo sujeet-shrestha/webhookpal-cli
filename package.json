@@ -1,0 +1,32 @@
+{
+  "name": "@webhookpal/cli",
+  "version": "0.1.0-beta.2",
+  "description": "Stream Webhook Pal events to a local server on your machine.",
+  "type": "module",
+  "bin": {
+    "webhookpal": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "commander": "^12.1.0",
+    "picocolors": "^1.0.1"
+  },
+  "optionalDependencies": {
+    "keytar": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0"
+  },
+  "files": ["dist", "README.md"]
+}
