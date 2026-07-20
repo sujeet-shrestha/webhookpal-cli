@@ -1,115 +1,224 @@
-# @webhookpal/cli (Beta)
+# Webhook Pal CLI (Beta)
 
-> Stream webhook events from Webhook Pal to a server running on your laptop.
+Stream webhook events from [Webhook Pal](https://webhookpal.maplestack.com.au)
+to a server running on your computer.
 
 The CLI subscribes to a private Realtime channel for one of your Webhook Pal
-sites and forwards every new event to a `http://localhost:...` URL of your
-choosing — with the exact raw body, method, safe headers and original query.
-Webhook Pal always ACKs the original provider itself, so a crashed local
-server never causes a delivery failure with Stripe, GitHub, or anyone else.
+sites and forwards every new event to a `http://localhost:...` URL. It preserves
+the exact raw body, original query string, HTTP method, and safe headers.
+Webhook Pal acknowledges the original provider itself, so a stopped local
+server does not cause a delivery failure with Stripe, GitHub, or another
+provider.
 
 ## Requirements
 
+- A Webhook Pal account at <https://webhookpal.maplestack.com.au>
+- At least one site (webhook endpoint) in the app
 - Node.js 20 or later
-- A Webhook Pal account and at least one site
-- A CLI token (create one on the Local Forwarding page)
-- The beta CLI source checkout
+- Git and terminal access
+- A CLI token created in **Local Forwarding (CLI)** in the app
+
+The beta CLI is installed from this repository. It is not currently published
+to npm, so `npx @webhookpal/cli` will return `404 Not Found`.
 
 ## Install
 
-Beta install from the public CLI repo (cross-platform, no sudo / no admin):
+The bundled installer works on macOS, Windows, and Linux without `sudo` or an
+administrator shell:
 
 ```bash
 git clone https://github.com/sujeet-shrestha/webhookpal-cli.git
 cd webhookpal-cli
 node scripts/install.mjs
-webhookpal --version
+```
+
+Open a new terminal after installation, then verify the command:
+
+```bash
+webhookpal --help
 ```
 
 The installer configures a user-local npm prefix (`~/.npm-global` on
-macOS/Linux, `%APPDATA%\npm` on Windows), adds it to your PATH, then runs
-`npm install`, `npm run build`, and `npm link`. If npm still reports a
-permissions error it prints step-by-step remediation for your OS. Never run
-it with `sudo` / from an elevated shell.
+macOS/Linux or `%APPDATA%\npm` on Windows), adds it to your `PATH`, and runs
+`npm install`, `npm run build`, and `npm link`. If installation fails, it prints
+OS-specific remediation. Do not run it with `sudo` or from an elevated shell.
 
-The npm package is not published during beta, so `npx @webhookpal/cli ...`
-will return `404 Not Found`. Use the installed `webhookpal` command instead.
+## Step 1: Create and store a CLI token
 
-
-## Login
+1. Sign in to [Webhook Pal](https://webhookpal.maplestack.com.au).
+2. Open **Local Forwarding (CLI)** in the sidebar.
+3. Select **Create token**, give it a name, and copy the token immediately. It
+   starts with `whp_cli_` and is only displayed once.
+4. Store it with the CLI:
 
 ```bash
 webhookpal login --token whp_cli_xxxxxxxxxxxx
 ```
 
-For CI shells and password-manager pastes, prefer the env var:
+The token is stored in macOS Keychain, Windows Credential Manager, or libsecret
+when available. Otherwise it is stored in
+`~/.config/webhookpal/credentials.json` with `0600` permissions. Never commit a
+token.
+
+For CI shells or password-manager injection, use `WEBHOOKPAL_TOKEN` instead:
 
 ```bash
 export WEBHOOKPAL_TOKEN=whp_cli_xxxxxxxxxxxx
-webhookpal listen --endpoint <site-id> --port 3000
+webhookpal listen --endpoint <SITE_ENDPOINT_UUID> --port 3000
 ```
 
-The token is stored in your OS keychain when available (macOS Keychain,
-Windows Credential Vault, libsecret). Otherwise it falls back to a
-`~/.config/webhookpal/credentials.json` file with `0600` permissions.
+In PowerShell:
 
-## Listen
+```powershell
+$env:WEBHOOKPAL_TOKEN = "whp_cli_xxxxxxxxxxxx"
+webhookpal listen --endpoint <SITE_ENDPOINT_UUID> --port 3000
+```
+
+## Step 2: Start a local web server
+
+Any local HTTP server works. For a minimal test, create `local-webhook.mjs`:
+
+```js
+import http from "node:http";
+
+http
+  .createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      console.log("\n--- Webhook received ---");
+      console.log(req.method, req.url);
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (key.startsWith("webhookpal-")) console.log(`${key}:`, value);
+      }
+      console.log("body:", body);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  })
+  .listen(3000, () => console.log("listening on http://localhost:3000"));
+```
+
+Run it in your first terminal:
+
+```bash
+node local-webhook.mjs
+```
+
+## Step 3: Start the CLI listener
+
+Open a second terminal and run:
 
 ```bash
 webhookpal listen \
-  --endpoint <site-id> \
+  --endpoint <SITE_ENDPOINT_UUID> \
+  --port 3000 \
+  --path /webhooks \
+  --verbose
+```
+
+PowerShell uses backticks for line continuation:
+
+```powershell
+webhookpal listen `
+  --endpoint <SITE_ENDPOINT_UUID> `
+  --port 3000 `
+  --path /webhooks `
+  --verbose
+```
+
+Get the endpoint UUID from the site's **Local Forwarding** card in the app.
+When connected, both the terminal and app show the active session.
+
+You can also specify the target directly:
+
+```bash
+webhookpal listen \
+  --endpoint <SITE_ENDPOINT_UUID> \
   --forward-to http://localhost:3000/webhooks
 ```
 
-Shortcut form:
+Every CLI line has a local timestamp, such as
+`[2026-07-19 14:03:22.481]`, to correlate CLI output with local server logs and
+the event drawer.
+
+### Listener options
+
+| Flag | Description |
+| --- | --- |
+| `--endpoint <id>` | Site endpoint UUID to subscribe to. Required. |
+| `--forward-to <url>` | Absolute `http://localhost` target URL. |
+| `--port <n>` | Shortcut for `http://localhost:<n>`. |
+| `--path </path>` | Path used with `--port`. Defaults to `/`. |
+| `--device-name <name>` | Label shown in the app. Defaults to the OS hostname. |
+| `--timeout <seconds>` | Local request timeout. Defaults to 10; maximum 60. |
+| `--verbose` | Log each forwarded request and response. |
+
+## Step 4: Send a test webhook
+
+In the app, open your site and copy its **Webhook URL**. In a third terminal,
+send a request to that exact URL:
 
 ```bash
-webhookpal listen --endpoint <site-id> --port 3000 --path /webhooks
+curl -X POST "<WEBHOOK_URL_FROM_THE_APP>" \
+  -H "content-type: application/json" \
+  -d '{"hello":"from curl"}'
 ```
 
-Options:
+PowerShell users can run:
 
-| Flag                | Description                                                   |
-| ------------------- | ------------------------------------------------------------- |
-| `--endpoint <id>`   | Site (endpoint) UUID to subscribe to. Required.               |
-| `--forward-to <url>`| Absolute `http://localhost` URL.                              |
-| `--port <n>`        | Shortcut for `http://localhost:<n>`.                          |
-| `--path </p>`       | Path appended when `--port` is used. Defaults to `/`.         |
-| `--device-name <s>` | Label shown in the dashboard. Defaults to the OS hostname.    |
-| `--timeout <s>`     | Local request timeout. Default 10, max 60.                    |
-| `--verbose`         | Log each request and response.                                |
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "<WEBHOOK_URL_FROM_THE_APP>" `
+  -ContentType "application/json" `
+  -Body '{"hello":"from powershell"}'
+```
 
-The command runs until you press `Ctrl+C`. On exit it best-effort disconnects
-its session so the dashboard reflects reality immediately.
+You should see:
 
-Every CLI line is prefixed with a local timestamp such as
-`[2026-07-19 14:03:22.481]` so output correlates cleanly with your local
-server logs and the event drawer in the app.
+1. `local-webhook.mjs` prints the request and its `webhookpal-*` headers.
+2. `webhookpal listen` logs a `200` response.
+3. The app's event drawer shows a **Local deliveries** row with
+   **Succeeded / 200**.
 
+## Step 5: Test replay
 
-## Status
+1. Stop `local-webhook.mjs` with `Ctrl+C`.
+2. Send another webhook. Its local delivery should fail with
+   `ECONNREFUSED`.
+3. Restart the server with `node local-webhook.mjs`.
+4. Open the event in the app and select **Replay to local**.
+5. Confirm that a new successful local-delivery row appears.
+
+## Step 6: Test disconnect and reconnect
+
+Temporarily disconnect your network or close the listener. The session becomes
+stale in the app. Restore the connection and restart the listener if necessary;
+the CLI reconnects automatically with exponential backoff while it is running.
+
+## Step 7: Clean up
+
+- Press `Ctrl+C` in the listener terminal to disconnect.
+- Run `webhookpal logout` to remove the locally stored token.
+- Optionally revoke the token in the app so it can never be reused.
+
+## Status and logout
 
 ```bash
 webhookpal status
-```
-
-Prints whether a token is stored and the account it belongs to.
-
-## Logout
-
-```bash
 webhookpal logout
 ```
 
-Removes the stored credential.
+`status` shows whether a token is configured. `logout` removes the stored
+credential.
 
 ## What is forwarded
 
-- Exact raw body bytes — no JSON re-serialization.
-- Original HTTP method and raw query string (merged with your target's query).
-- All safe headers, with hop-by-hop headers removed (`connection`, `host`,
-  `content-length`, `transfer-encoding`, `upgrade`, etc.).
-- Extra Webhook Pal metadata headers:
+- Exact raw body bytes without JSON re-serialization.
+- Original HTTP method and query string, merged with the target query.
+- Safe request headers, with hop-by-hop headers such as `connection`, `host`,
+  `content-length`, `transfer-encoding`, and `upgrade` removed.
+- Webhook Pal metadata headers:
   - `WebhookPal-Event-Id`
   - `WebhookPal-Delivery-Attempt-Id`
   - `WebhookPal-Delivery-Source: live | manual_replay`
@@ -118,13 +227,34 @@ Removes the stored credential.
 ## Security
 
 - Only `http://localhost`, `http://127.0.0.1`, and `http://[::1]` targets are
-  accepted. No LAN, no public URLs, no HTTPS local targets in the beta.
+  accepted. LAN targets, public URLs, and local HTTPS are not supported during
+  beta.
 - Response cookies, `authorization`, and `proxy-authorization` headers are
-  redacted before Webhook Pal stores them.
+  redacted before storage.
 - Response bodies larger than 64 KB are truncated.
-- Token revocation kicks live sessions immediately.
+- Revoking a CLI token terminates its live sessions.
 
-## Beta
+## Troubleshooting
 
-This CLI is in beta. Command shapes may change in a future release. Report
-issues at support@tech-o.dev.
+- **Connection refused:** confirm the local server is running on the port passed
+  to `--port`.
+- **`TOKEN_REVOKED`:** create a new token in the app and run `webhookpal login`
+  again.
+- **Nothing arrives:** confirm `--endpoint` matches the UUID in the site's Local
+  Forwarding card and that the site is not paused.
+- **Local HTTPS:** unsupported; use a plain `http://localhost` target.
+- **npm `EACCES`, `EPERM`, or “Access is denied”:** rerun
+  `node scripts/install.mjs`. Do not use `sudo` or an elevated shell.
+- **`webhookpal: command not found`:** open a new terminal after installation so
+  the updated `PATH` is loaded.
+- **PowerShell blocks `webhookpal`:** run
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
+- **libsecret is unavailable on Linux:** install `libsecret-1-0` and a compatible
+  keyring, or use the `WEBHOOKPAL_TOKEN` environment variable.
+
+## Beta and support
+
+The CLI is in beta and its command shapes may change. For help or to report an
+issue, email [support.webhookpal@maplestack.com.au](mailto:support.webhookpal@maplestack.com.au).
+
+Web app: <https://webhookpal.maplestack.com.au>
